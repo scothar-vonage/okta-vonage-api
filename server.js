@@ -2,6 +2,12 @@ require("dotenv").config();
 
 const { Auth } = require("@vonage/auth");
 const { Messages, SMS } = require("@vonage/messages");
+const {
+  Voice,
+  NCCOBuilder,
+  Talk,
+  OutboundCallWithNCCO,
+} = require("@vonage/voice");
 
 const express = require("express");
 
@@ -16,7 +22,8 @@ const brand = process.env.VERIFY_BRAND;
 
 const options = {};
 
-const client = new Messages(credentials, options);
+const smsClient = new Messages(credentials, options);
+const voiceClient = new Voice(credentials, options);
 
 app.use(express.json());
 
@@ -29,6 +36,7 @@ app.post("/verify", async (req, res) => {
     const ret = await sendVerificationRequest(number, code, channel);
     res.send(ret);
   } catch (e) {
+    console.error(e);
     res.send(getErrorResponse("SMS", e));
   }
 });
@@ -42,12 +50,14 @@ async function sendVerificationRequest(number, code, channel) {
   if (channel.toLowerCase() == "sms") {
     console.log("Sending SMS to " + number);
   } else {
-    console.log("Unsupported channel: " + channel);
+    console.log("Sending Call to " + number);
+    const ret = await sendCall(number, code);
+    return getSuccessResponse("verify", ret.uuid);
   }
 
   let res;
   try {
-    res = await client.send(
+    res = await smsClient.send(
       new SMS({
         to: number,
         from: process.env.VERIFICATION_NUMBER,
@@ -62,7 +72,36 @@ async function sendVerificationRequest(number, code, channel) {
     throw error;
   }
 }
+async function sendCall(number, code) {
+  const tts = `<speak>${
+    process.env.VERIFICATION_TEXT
+  } <prosody rate='x-slow'>${code
+    .split("")
+    .join(". ")}</prosody>. Again, that's: <prosody rate='x-slow'>${code
+    .split("")
+    .join(". ")}</prosody>. Good bye!</speak>`;
 
+  const builder = new NCCOBuilder();
+  builder.addAction(new Talk(tts));
+  console.debug(`Sending tts: ${tts}`);
+
+  let resp;
+
+  try {
+    resp = await voiceClient.createOutboundCall(
+      new OutboundCallWithNCCO(
+        builder.build(),
+        { type: "phone", number: number },
+        { type: "phone", number: process.env.VERIFICATION_NUMBER }
+      )
+    );
+    console.debug(`Call uuid: ${resp.uuid}`);
+  } catch (e) {
+    console.log(e);
+  }
+
+  return resp;
+}
 function getSuccessResponse(method, sid) {
   console.log("Successfully sent " + method + " : " + sid);
   const actionKey = "com.okta.telephony.action";
